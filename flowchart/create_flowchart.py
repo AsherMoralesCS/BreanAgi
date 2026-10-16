@@ -1,41 +1,56 @@
-"""Generate the color-coded program flowchart. Requires reportlab."""
+"""Generate the source-based A4 flowchart. Requires reportlab."""
 from pathlib import Path
+from xml.sax.saxutils import escape
 import math
-from reportlab.pdfgen import canvas
+
 from reportlab.lib.colors import HexColor
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.pdfgen import canvas
+from reportlab.platypus import Paragraph
 
 OUT = Path(__file__).resolve().parent
-WIDTH, HEIGHT = 900, 1200
+WIDTH, HEIGHT = A4
+MARGIN = 73.0  # 72 points = one inch; allow for border strokes.
+CENTER = WIDTH / 2
 INK = '#203249'
 PALETTE = {
     'term': ('#dcfce7', '#15803d'),
     'process': ('#dbeafe', '#2563eb'),
-    'sub': ('#ede9fe', '#7c3aed'),
-    'decision': ('#fef3c7', '#b77908'),
+    'sub': ('#ede9fe', '#6d28d9'),
+    'decision': ('#fef3c7', '#96630a'),
     'io': ('#ccfbf1', '#0f766e'),
     'error': ('#ffe4e6', '#be123c'),
-    'connector': ('#ffffff', '#64748b'),
+    'raise': ('#ffe4e6', '#be123c'),
 }
-# A letter keeps the same fill on every page; the label also works in grayscale.
 CONNECTOR_COLORS = {
-    'R': ('#1d4ed8', '#ffffff'),  # Event loop: blue
-    'Z': ('#facc15', '#203249'),  # Reset: yellow
-    'M': ('#7c3aed', '#ffffff'),  # Menu: purple
-    'A': ('#047857', '#ffffff'),  # Add Line: green
-    'S': ('#0e7490', '#ffffff'),  # Solve: cyan
-    'D': ('#c2410c', '#ffffff'),  # Remove Selected: orange
-    'C': ('#be185d', '#ffffff'),  # Clear All: pink
-    'V': ('#475569', '#ffffff'),  # Refresh display: slate
-    'P': ('#854d0e', '#ffffff'),  # Candidate selection: brown
-    'E': ('#b91c1c', '#ffffff'),  # Solve error: red
+    'R': ('#1d4ed8', '#ffffff'),  # Return to the event loop
+    'Z': ('#facc15', '#203249'),  # Reset
+    'M': ('#7c3aed', '#ffffff'),  # Return to the menu
+    'A': ('#047857', '#ffffff'),  # Add Line
+    'S': ('#0e7490', '#ffffff'),  # Solve
+    'D': ('#c2410c', '#ffffff'),  # Remove Selected
+    'C': ('#be185d', '#ffffff'),  # Clear All
+    'V': ('#475569', '#ffffff'),  # Refresh table and plot
+    'P': ('#854d0e', '#ffffff'),  # Candidate solution selection
+    'E': ('#b91c1c', '#ffffff'),  # ValueError handling
+    'K': ('#4d7c0f', '#ffffff'),  # Open the selected case
+    'L': ('#4338ca', '#ffffff'),  # One omitted side
+    'T': ('#075985', '#ffffff'),  # Two omitted sides
 }
-C = canvas.Canvas(str(OUT / 'TraverseCraft_Flowchart.pdf'), pagesize=(WIDTH, HEIGHT))
+C = canvas.Canvas(str(OUT / 'TraverseCraft_Flowchart.pdf'), pagesize=A4)
 C.setTitle('Program flowchart')
-NODE_BOUNDS = []
+C.setAuthor('')
+BOUNDS = []
+NODES = []
+PAGE = 0
+RADIUS = 10
+STEP_STYLE = ParagraphStyle('steps', fontName='Helvetica', fontSize=10,
+                            leading=12.5, textColor=HexColor(INK))
 
 
-def wrapped(value, width, font, size):
+def wrap(value, width, size=10.5, font='Helvetica'):
     result = []
     for paragraph in value.split('\n'):
         line = ''
@@ -47,206 +62,255 @@ def wrapped(value, width, font, size):
             else:
                 line = trial
         result.append(line)
+    assert all(stringWidth(line, font, size) <= width + .01 for line in result), value
     return result
 
 
-def lines(x, y, value, size=13, font='Helvetica', color=INK):
+def record(x0, y0, x1, y1):
+    BOUNDS.append((x0, y0, x1, y1))
+
+
+def text(x, baseline, value, size=10.5, color=INK, font='Helvetica', center=True):
     C.setFillColor(HexColor(color))
     C.setFont(font, size)
-    for k, line in enumerate(value):
-        C.drawCentredString(x, y - k * size * 1.27, line)
+    if center:
+        C.drawCentredString(x, baseline, value)
+        half = stringWidth(value, font, size)/2
+        record(x-half, baseline-3, x+half, baseline+size)
+    else:
+        C.drawString(x, baseline, value)
+        record(x, baseline-3, x+stringWidth(value, font, size), baseline+size)
 
 
-def node(x, y, label, ref='', w=300, h=68, kind='process', size=13):
+def node(x, y, label, ref='', w=190, h=65, kind='process'):
     fill, stroke = PALETTE[kind]
-    C.setFillColor(HexColor(fill))
-    C.setStrokeColor(HexColor(stroke))
-    C.setLineWidth(1.25)
-    if kind == 'connector':
-        fill, letter_color = CONNECTOR_COLORS[label]
-        C.setFillColor(HexColor(fill))
-        C.setStrokeColor(HexColor(fill))
-        C.circle(x, y, 18, stroke=1, fill=1)
-        lines(x, y - 4.5, [label], 13, 'Helvetica-Bold', color=letter_color)
-        NODE_BOUNDS.append((x-18, y-18, x+18, y+18))
-        return
+    C.setFillColor(HexColor(fill)); C.setStrokeColor(HexColor(stroke)); C.setLineWidth(1)
     if kind == 'term':
         C.roundRect(x-w/2, y-h/2, w, h, h/2, stroke=1, fill=1)
     elif kind == 'decision':
-        p = C.beginPath()
-        for i, (px, py) in enumerate([(x,y+h/2), (x+w/2,y), (x,y-h/2), (x-w/2,y)]):
-            (p.moveTo if i == 0 else p.lineTo)(px,py)
-        p.close()
-        C.drawPath(p, stroke=1, fill=1)
-    elif kind in ('io', 'error'):
-        p = C.beginPath()
-        pts = [(x-w/2+12,y+h/2),(x+w/2,y+h/2),(x+w/2-12,y-h/2),(x-w/2,y-h/2)]
-        for i,(px,py) in enumerate(pts):
-            (p.moveTo if i == 0 else p.lineTo)(px,py)
-        p.close()
-        C.drawPath(p,stroke=1,fill=1)
+        p=C.beginPath(); p.moveTo(x,y+h/2)
+        for pt in [(x+w/2,y),(x,y-h/2),(x-w/2,y)]:p.lineTo(*pt)
+        p.close();C.drawPath(p,stroke=1,fill=1)
+    elif kind in ('io','error'):
+        p=C.beginPath();p.moveTo(x-w/2+7,y+h/2)
+        for pt in [(x+w/2,y+h/2),(x+w/2-7,y-h/2),(x-w/2,y-h/2)]:p.lineTo(*pt)
+        p.close();C.drawPath(p,stroke=1,fill=1)
     else:
-        C.roundRect(x-w/2,y-h/2,w,h,5,stroke=1,fill=1)
-        if kind == 'sub':
-            for offset in (-w/2+7,w/2-7):
-                C.line(x+offset,y-h/2+5,x+offset,y+h/2-5)
-    inner_width = w * .65 if kind == 'decision' else w-36
-    main = wrapped(label, inner_width, 'Helvetica', size)
-    refs = wrapped(ref, w-28, 'Helvetica', 10.5) if ref else []
-    total = len(main)*size*1.27 + (len(refs)*13.3+7 if refs else 0)
-    assert total <= h-8, (label,total,h)
-    assert all(stringWidth(t,'Helvetica',size) <= inner_width for t in main), label
-    start = y + total/2 - size
-    lines(x,start,main,size)
-    if refs:
-        lines(x,start-len(main)*size*1.27-7,refs,10.5,color=stroke)
-    NODE_BOUNDS.append((x-w/2,y-h/2,x+w/2,y+h/2))
+        C.roundRect(x-w/2,y-h/2,w,h,3,stroke=1,fill=1)
+        if kind=='sub':
+            for dx in (-w/2+5,w/2-5):C.line(x+dx,y-h/2+3,x+dx,y+h/2-3)
+    main=wrap(label, w-20 if kind!='decision' else w*.65)
+    refs=wrap(ref,w-18,10) if ref else []
+    total=len(main)*13.1 + (4+len(refs)*12.5 if refs else 0)
+    assert total<=h-9,(PAGE,label,total,h)
+    baseline=y+total/2-10.5
+    for i,line in enumerate(main):text(x,baseline-i*13.1,line)
+    for i,line in enumerate(refs):text(x,baseline-len(main)*13.1-4-i*12.5,line,10,stroke)
+    record(x-w/2-.5,y-h/2-.5,x+w/2+.5,y+h/2+.5)
+    NODES.append((x-w/2,y-h/2,x+w/2,y+h/2,label))
 
 
-def edge(points, label='', at=None, color=INK, arrow=True):
-    C.setStrokeColor(HexColor(color))
-    C.setFillColor(HexColor(color))
-    C.setLineWidth(1.15)
-    path=C.beginPath(); path.moveTo(*points[0])
-    for p in points[1:]: path.lineTo(*p)
-    C.drawPath(path)
+def connector(x,y,label):
+    fill,letter=CONNECTOR_COLORS[label]
+    C.setFillColor(HexColor(fill));C.setStrokeColor(HexColor(fill));C.setLineWidth(1)
+    C.circle(x,y,RADIUS,stroke=1,fill=1)
+    text(x,y-3.5,label,10.5,letter,'Helvetica-Bold')
+    record(x-RADIUS-.5,y-RADIUS-.5,x+RADIUS+.5,y+RADIUS+.5)
+    NODES.append((x-RADIUS,y-RADIUS,x+RADIUS,y+RADIUS,label))
+
+
+def edge(points,label='',at=None,color=INK,arrow=True):
+    C.setStrokeColor(HexColor(color));C.setFillColor(HexColor(color));C.setLineWidth(.85)
+    p=C.beginPath();p.moveTo(*points[0])
+    for pt in points[1:]:p.lineTo(*pt)
+    C.drawPath(p)
     if arrow:
-        a,b=points[-2:]
-        angle=math.atan2(b[1]-a[1],b[0]-a[0])
+        a,b=points[-2:];angle=math.atan2(b[1]-a[1],b[0]-a[0])
         p=C.beginPath();p.moveTo(*b)
-        for offset in (-.45,.45):p.lineTo(b[0]-7*math.cos(angle+offset),b[1]-7*math.sin(angle+offset))
+        for off in (-.45,.45):p.lineTo(b[0]-5*math.cos(angle+off),b[1]-5*math.sin(angle+off))
         p.close();C.drawPath(p,stroke=0,fill=1)
+    for x,y in points:record(x-.5,y-.5,x+.5,y+.5)
     if label:
-        x,y=at
-        lines(x,y,[label],10.5,color=color)
+        for i,line in enumerate(label.split('\n')):text(at[0],at[1]-i*12.5,line,10,color)
 
 
-def connector(x,y,label):node(x,y,label,kind='connector')
-
-
-def page(title):
-    C.setFillColor(HexColor(INK));C.setFont('Helvetica-Bold',22)
-    C.drawString(45,1150,title)
-    C.setStrokeColor(HexColor('#d6dee8'));C.line(45,1126,855,1126)
+def page(title,steps):
+    global PAGE
+    PAGE+=1
+    text(MARGIN,752,f'{PAGE}  {title}',16,font='Helvetica-Bold',center=False)
+    C.setStrokeColor(HexColor('#cbd5e1'));C.setLineWidth(.6)
+    C.line(MARGIN,742,WIDTH-MARGIN,742);record(MARGIN-.3,741.7,WIDTH-MARGIN+.3,742.3)
+    # A bordered content section, not a page footer.
+    x,y,w,h=MARGIN,73,WIDTH-2*MARGIN,150
+    C.setStrokeColor(HexColor('#94a3b8'));C.setFillColor(HexColor('#f8fafc'));C.setLineWidth(.65)
+    C.roundRect(x,y,w,h,3,stroke=1,fill=1)
+    record(x-.325,y-.325,x+w+.325,y+h+.325)
+    text(x+10,y+h-17,'NUMBERED STEPS',10,font='Helvetica-Bold',center=False)
+    col_w=(w-30)/2
+    for i,(heading,description) in enumerate(steps):
+        col=i//2;row=i%2
+        assert col<2
+        paragraph=Paragraph(f'<b>{i+1}. {escape(heading)}</b> {escape(description)}',STEP_STYLE)
+        _,ph=paragraph.wrap(col_w,120)
+        px=x+10+col*(col_w+10);top=y+h-30-row*55
+        assert ph<=52,(PAGE,i,ph)
+        paragraph.drawOn(C,px,top-ph)
+        record(px,top-ph,px+col_w,top)
 
 
 def finish():
-    for x0,y0,x1,y1 in NODE_BOUNDS:
-        assert 24 <= x0 < x1 <= WIDTH-24 and 35 <= y0 < y1 <= 1105
-    NODE_BOUNDS.clear()
-    C.showPage()
+    for x0,y0,x1,y1 in BOUNDS:
+        assert 72<=x0<=x1<=WIDTH-72,(PAGE,'horizontal margin',(x0,x1))
+        assert 72<=y0<=y1<=HEIGHT-72,(PAGE,'vertical margin',(y0,y1))
+    for i,a in enumerate(NODES):
+        for b in NODES[i+1:]:
+            overlap_x=min(a[2],b[2])-max(a[0],b[0])
+            overlap_y=min(a[3],b[3])-max(a[1],b[1])
+            assert overlap_x<=0 or overlap_y<=0,(PAGE,'overlap',a[4],b[4])
+    BOUNDS.clear();NODES.clear();C.showPage()
 
 
-# Main window and callback dispatch. Lettered connectors replace long return lines.
-page('1  User interface')
-node(450,1070,'Start',w=120,h=40,kind='term')
-node(450,970,'Main window: switches between the menu screen and the solver screen.',
-     'root = tk.Tk()  |  TraverseApp(root)',w=440,h=100,kind='sub')
-edge([(450,1050),(450,1020)])
-node(450,845,'Select the traverse case to work on','show_menu()  |  open_case(index)  |  reset()',w=440,h=86,kind='io')
-edge([(450,920),(450,888)])
-connector(160,845,'M');edge([(178,845),(230,845)])
-node(450,710,'User interface','root.mainloop()',w=300,h=100,kind='decision')
-edge([(450,802),(450,760)])
-connector(160,780,'R');edge([(178,780),(220,780),(220,710),(300,710)])
-edge([(300,710),(55,710),(55,295)],arrow=False)
-edge([(600,710),(845,710),(845,295)],arrow=False)
-for x,y,label,key in [(250,565,'Add Line','A'),(250,430,'Solve Omitted Measurements','S'),(250,295,'Remove Selected','D'),(650,565,'Reset','Z'),(650,430,'Clear All','C'),(650,295,'Return','M')]:
-    node(x,y,label,w=260,h=62,kind='io')
-    if x==250:
-        edge([(55,y),(120,y)]);edge([(380,y),(392,y)]);connector(410,y,key)
-    else:
-        edge([(845,y),(780,y)]);edge([(520,y),(508,y)]);connector(490,y,key)
-node(450,105,'End',w=120,h=40,kind='term')
-edge([(450,660),(450,125)],'return',(483,175))
+page('User interface',[
+    ('Start.','Create root = tk.Tk(), then TraverseApp(root); show_menu() displays the menu.'),
+    ('User interface.','Run root.mainloop() before any case-selection or button callback.'),
+    ('Select the traverse case to work on.','K opens a case; A, S, D, Z and C perform the selected action.'),
+    ('Return / End.','M shows the menu. R resumes the event loop. Close window is the only path to End.'),
+])
+node(CENTER,724,'Start',w=76,h=24,kind='term')
+node(CENTER,660,'Main window: switches between the menu screen and the solver screen.',
+     'root = tk.Tk()\nTraverseApp(root) | show_menu()',w=276,h=80,kind='sub')
+edge([(CENTER,712),(CENTER,700)])
+node(CENTER,573,'User interface','root.mainloop()',w=265,h=48)
+edge([(CENTER,620),(CENTER,597)])
+node(CENTER,490,'MenuScreen / SolverScreen',w=170,h=66,kind='decision')
+edge([(CENTER,549),(CENTER,523)])
+connector(104,573,'R');edge([(114,573),(140,573),(140,535),(CENTER,535)])
+edge([(CENTER-85,490),(83,490),(83,255)],arrow=False)
+edge([(CENTER+85,490),(512,490),(512,255)],arrow=False)
+for y,label,key in [(420,'Select the traverse case\nto work on','K'),(365,'Add Line','A'),(310,'Solve Omitted Measurements','S'),(255,'Remove Selected','D')]:
+    connector(260,y,key);edge([(83,y),(250,y)])
+    words=wrap(label,152,10)
+    for i,line in enumerate(words):text(166.5,y+5+(len(words)-1-i)*12.5,line,10)
+for y,label,key in [(420,'Return','M'),(365,'Reset','Z'),(310,'Clear All','C')]:
+    connector(335,y,key);edge([(512,y),(345,y)],label,(430,y+8))
+node(335,255,'End',w=65,h=24,kind='term')
+edge([(512,255),(367.5,255)],'Close window',(440,267))
 finish()
 
-# Add Line and the shared display refresh reached by successful changes.
-page('2  Add Line')
-connector(280,1070,'A')
-node(280,975,'Add a traverse line (use Unknown for omitted values)',
-     'Line (e.g. BC)  |  Bearing (e.g. N 48°50\'10\'\' E)  |  Length (m)',w=440,h=88,kind='io')
-edge([(280,1052),(280,1019)])
-node(280,850,'all(texts)',w=250,h=80,kind='decision');edge([(280,931),(280,890)])
-node(690,850,'Please fill in all input fields.',w=300,h=68,kind='error')
-edge([(405,850),(540,850)],'False',(466,867));connector(690,770,'R');edge([(690,816),(690,788)])
-node(280,715,'Build a Line from the entry boxes.\nBuild a Bearing from user text.',
-     'Line.from_text(*texts)  |  Bearing.parse(bearing_text)',w=440,h=100,kind='sub')
-edge([(280,810),(280,765)],'True',(305,785))
-node(690,635,'Invalid input','str(error)',w=290,h=74,kind='error')
-edge([(500,715),(690,715),(690,672)],'ValueError',(601,732),color='#be123c')
-connector(690,550,'R');edge([(690,598),(690,568)])
-node(280,555,'Add Line','self.traverse.add(line)\nself.solved = set()  |  entry.delete(0, tk.END)',w=440,h=90)
-edge([(280,665),(280,600)])
-connector(280,440,'V');edge([(280,510),(280,458)])
-node(450,315,'Traverse Data & Solved Results','refresh()  |  line.table_values()',w=440,h=80,kind='io')
-edge([(280,422),(280,385),(450,385),(450,355)])
-node(450,190,'Traverse Plot','draw_plot()  |  self.traverse.vertices()  |  self.draw_edges(points)',w=510,h=80,kind='io')
-edge([(450,275),(450,230)])
-connector(450,85,'R');edge([(450,150),(450,103)])
+page('Add Line',[
+    ('Add a traverse line.','Enter Line, Bearing and Length (m). Use Unknown for omitted values.'),
+    ('Input fields.','all(texts) rejects empty fields: Please fill in all input fields.'),
+    ('Build a Line from the entry boxes.','Line.from_text() and Bearing.parse() validate the entries; ValueError shows Invalid input.'),
+    ('Add Line.','self.traverse.add(line) saves the line; clear the entry boxes and continue at V.'),
+])
+connector(215,720,'A')
+node(215,650,'Add a traverse line (use Unknown for omitted values)',
+     'name_entry | bearing_entry | length_entry',w=264,h=70,kind='io')
+edge([(215,710),(215,685)])
+node(215,550,'all input fields\nall(texts)',w=182,h=64,kind='decision');edge([(215,615),(215,582)])
+node(430,550,'Please fill in all input fields.',w=170,h=56,kind='error')
+edge([(306,550),(345,550)],'False',(325,565));connector(430,480,'R');edge([(430,522),(430,490)])
+node(215,440,'Build a Line from the entry boxes.\nBuild a Bearing from user text.',
+     'Line.from_text() | Bearing.parse()',w=264,h=84,kind='sub')
+edge([(215,518),(215,482)],'True',(239,497))
+node(435,365,'Invalid input','str(error)',w=160,h=66,kind='error')
+edge([(347,440),(435,440),(435,398)],'ValueError',(458,420),color='#be123c')
+connector(435,290,'R');edge([(435,332),(435,300)])
+node(215,325,'Add Line','self.traverse.add(line)\nentry.delete(0, tk.END)',w=264,h=70)
+edge([(215,398),(215,360)])
+connector(215,255,'V');edge([(215,290),(215,265)])
 finish()
 
-# The data determines the solver; the menu selection is not solver validation.
-page('3  Solve Omitted Measurements')
-connector(330,1070,'S')
-node(330,990,'Fill in the omitted measurements in place.','self.traverse.solve()',w=420,h=82,kind='sub')
-edge([(330,1052),(330,1031)])
-connector(730,990,'E');edge([(540,990),(712,990)],'ValueError',(625,1008),color='#be123c')
-node(330,885,'omitted',w=230,h=70,kind='decision');edge([(330,949),(330,920)])
-node(690,885,'No omitted measurements found - nothing to solve.',w=300,h=80,kind='error')
-edge([(445,885),(540,885)],'False',(490,902));connector(690,810,'E');edge([(690,845),(690,828)])
-node(330,775,'The omitted sides must add up to this vector for the traverse to close.',
-     'line.components()  |  closing = (-known_lat, -known_dep)',w=430,h=90,kind='process')
-edge([(330,850),(330,820)],'True',(355,832))
-node(330,670,'omitted','len(omitted)',w=250,h=80,kind='decision');edge([(330,730),(330,710)])
-node(175,555,'Case I: one side has neither bearing nor length.',
-     '_solve_one_side(omitted[0], closing)',w=290,h=100,kind='sub')
-edge([(205,670),(175,670),(175,605)],'1',(185,688))
-node(580,555,'kinds','_solve_two_sides(omitted, closing)',w=370,h=100,kind='decision')
-edge([(455,670),(580,670),(580,605)],'2',(520,688))
-connector(805,670,'E');edge([(580,670),(787,670)],'else',(728,688))
-node(190,405,'Case III: both bearings known, so solve two simultaneous equations.',
-     '_solve_two_lengths(i, j, closing)',w=310,h=100,kind='sub')
-node(580,405,'Case IV: both lengths known, so intersect two circles (two mirror solutions).',
-     '_solve_two_bearings(i, j, closing)',w=330,h=100,kind='sub')
-edge([(395,555),(365,555),(365,478),(190,478),(190,455)],'{"length"}',(269,494))
-edge([(580,505),(580,455)],'{"bearing"}',(631,479))
-node(580,265,'Case II: one side is missing its length, the other its bearing.',
-     '_solve_length_and_bearing(i, j, closing)',w=360,h=94,kind='sub')
-edge([(765,555),(795,555),(795,265),(760,265)],'{"length", "bearing"}',(777,575))
-connector(840,490,'E');edge([(795,555),(840,555),(840,508)],'else',(840,571))
-# All successful solver candidates meet at P; solver failures meet at E.
-connector(90,300,'P');edge([(175,505),(175,485),(25,485),(25,300),(72,300)])
-connector(190,300,'P');edge([(190,355),(190,318)])
-# Matching P connectors continue with candidate selection on page 4.
-connector(385,405,'P');edge([(415,405),(403,405)])
-connector(580,175,'P');edge([(580,218),(580,193)])
+page('MenuScreen / SolverScreen',[
+    ('Select the traverse case to work on.','open_case(index) switches to SolverScreen, sets the case and calls reset().'),
+    ('Return / Reset.','show_menu() returns to the menu. reset(): Empty the table and the entry boxes.'),
+    ('Remove Selected.','With selected rows, remove them and refresh at V. Without selected rows, return at R.'),
+    ('Clear All.','An empty table resets directly. Otherwise, confirm Clear all: True resets at Z; False returns at R.'),
+])
+for x,label in [(132,'K'),(300,'M'),(455,'Z')]:connector(x,718,label)
+node(132,650,'Select the traverse case to work on','open_case(index)',w=116,h=86,kind='sub')
+edge([(132,708),(132,693)]);connector(132,570,'Z');edge([(132,607),(132,580)])
+node(300,650,'Start screen where the user picks which case to work on.','show_menu()',w=142,h=86,kind='sub')
+edge([(300,708),(300,693)]);connector(300,570,'R');edge([(300,607),(300,580)])
+node(455,650,'Empty the table and the entry boxes.','reset()',w=130,h=86,kind='sub')
+edge([(455,708),(455,693)]);connector(455,570,'V');edge([(455,607),(455,580)])
+connector(155,510,'D');node(155,440,'Remove Selected\nselected',w=145,h=70,kind='decision');edge([(155,500),(155,475)])
+connector(285,440,'R');edge([(227.5,440),(275,440)],'False',(250,454))
+node(155,342,'Removed selected line(s)','self.traverse.remove()',w=148,h=72,kind='sub')
+edge([(155,405),(155,378)],'True',(179,393));connector(155,255,'V');edge([(155,306),(155,265)])
+connector(410,510,'C');node(410,440,'self.traverse.lines',w=160,h=60,kind='decision');edge([(410,500),(410,470)])
+connector(510,440,'Z');edge([(490,440),(500,440)],'False',(500,458))
+node(410,335,'Clear all','messagebox.askyesno()',w=170,h=100,kind='decision')
+edge([(410,410),(410,385)],'True',(436,396))
+connector(285,335,'R');edge([(325,335),(295,335)],'False',(306,351))
+connector(410,255,'Z');edge([(410,285),(410,265)],'True',(435,271))
 finish()
 
-page('4  Results and table actions')
-connector(210,1070,'P')
-node(210,965,"Prefer one that doesn't cross itself.",
-     'chosen = options[0]  |  self.is_simple(trial)\nself.lines[k] = line',w=350,h=110,kind='sub')
-edge([(210,1052),(210,1020)])
-connector(210,835,'V');edge([(210,910),(210,853)])
-connector(655,1070,'E')
-node(655,965,'Cannot solve','str(error)\nStatus: could not solve',w=350,h=110,kind='error')
-edge([(655,1052),(655,1020)])
-connector(655,835,'R');edge([(655,910),(655,853)])
-# Remove, Reset, Clear All are independent event callbacks.
-connector(170,690,'D');connector(450,690,'Z');connector(730,690,'C')
-node(170,590,'selected',w=200,h=80,kind='decision');edge([(170,672),(170,630)])
-connector(300,590,'R');edge([(270,590),(282,590)],'False',(293,613))
-node(170,450,'Removed selected line(s)','self.traverse.remove(selected)',w=250,h=88,kind='sub')
-edge([(170,550),(170,494)],'True',(195,520));connector(170,350,'V');edge([(170,406),(170,368)])
-node(450,590,'Empty the table and the entry boxes.','reset()',w=245,h=110,kind='sub');edge([(450,672),(450,645)])
-connector(450,450,'V');edge([(450,535),(450,468)])
-node(730,590,'self.traverse.lines',w=240,h=80,kind='decision');edge([(730,672),(730,630)])
-connector(730,485,'Z');edge([(730,550),(730,503)],'False',(756,525))
-node(730,350,'Remove every line\nfrom the table?','messagebox.askyesno()',w=270,h=140,kind='decision')
-edge([(850,590),(870,590),(870,440),(730,440),(730,420)],'True',(847,461))
-connector(730,225,'Z');edge([(730,280),(730,243)],'True',(755,267))
-connector(520,350,'R');edge([(595,350),(538,350)],'False',(565,368))
+page('Solve Omitted Measurements',[
+    ('Fill in the omitted measurements in place.','Call self.traverse.solve(); SolverScreen.solve() catches ValueError through E.'),
+    ('omitted.','No omitted measurements found - nothing to solve. Otherwise, continue with the known lines.'),
+    ('closing.','Use line.components() for complete lines; closing = (-known_lat, -known_dep).'),
+    ('len(omitted).','One omitted side follows L; two follow T. Any other count follows E. The menu case does not choose the solver.'),
+])
+connector(215,720,'S')
+node(215,650,'Fill in the omitted measurements in place.','self.traverse.solve()',w=260,h=70,kind='sub')
+edge([(215,710),(215,685)]);connector(460,650,'E');edge([(345,650),(450,650)],'ValueError',(397,665),color='#be123c')
+node(215,553,'omitted\nmeasurements',w=180,h=64,kind='decision');edge([(215,615),(215,585)])
+node(430,553,'No omitted measurements found - nothing to solve.','raise ValueError',w=170,h=80,kind='raise')
+edge([(305,553),(345,553)],'False',(325,568));connector(430,480,'E');edge([(430,513),(430,490)])
+node(215,439,'The omitted sides must add up to this vector for the traverse to close.',
+     'closing = (-known_lat, -known_dep)',w=260,h=78)
+edge([(215,521),(215,478)],'True',(239,497))
+node(215,340,'omitted\nlen(omitted)',w=180,h=64,kind='decision');edge([(215,400),(215,372)])
+connector(85,340,'L');edge([(125,340),(95,340)],'1',(109,354))
+connector(410,340,'T');edge([(305,340),(400,340)],'2',(352,354))
+connector(215,255,'E');edge([(215,308),(215,265)],'else',(239,282))
+finish()
+
+page('Omitted measurements',[
+    ('Case I.','One side has neither bearing nor length: _solve_one_side(). Other one-side combinations raise ValueError.'),
+    ('Case III.','Both bearings known, so solve two simultaneous equations: _solve_two_lengths().'),
+    ('Case IV.','Both lengths known, so intersect two circles (two mirror solutions): _solve_two_bearings().'),
+    ('Case II.','One side is missing its length, the other its bearing: _solve_length_and_bearing(). Unsupported kinds follow E.'),
+])
+connector(155,720,'L')
+node(155,650,'Case I: one side has neither bearing nor length.','_solve_one_side()',w=160,h=92,kind='sub')
+edge([(155,710),(155,696)]);connector(155,565,'P');edge([(155,604),(155,575)])
+connector(425,720,'T');node(425,655,'bearing / length\nkinds',w=160,h=64,kind='decision');edge([(425,710),(425,687)])
+node(155,455,'Case III: both bearings known, so solve two simultaneous equations.',
+     '_solve_two_lengths()',w=160,h=100,kind='sub')
+edge([(345,655),(295,655),(295,535),(155,535),(155,505)],'{"length"}',(265,672))
+node(425,485,'Case IV: both lengths known, so intersect two circles (two mirror solutions).',
+     '_solve_two_bearings()',w=176,h=112,kind='sub')
+edge([(425,623),(425,541)],'{"bearing"}',(472,582))
+connector(510,575,'E');edge([(505,655),(510,655),(510,585)],'else',(496,672))
+node(155,285,'Case II: one side is missing its length, the other its bearing.',
+     '_solve_length_and_bearing()',w=160,h=90,kind='sub')
+edge([(385,639),(315,639),(315,360),(155,360),(155,330)],'{"length", "bearing"}',(250,589))
+connector(155,375,'P');edge([(155,405),(155,385)])
+connector(425,385,'P');edge([(425,429),(425,395)])
+connector(285,285,'P');edge([(235,285),(275,285)])
+finish()
+
+page('Traverse Data & Solved Results',[
+    ('options.','No valid solution - check the input data. Empty options raise ValueError and follow E.'),
+    ('chosen.','Prefer one that doesn\'t cross itself. Start with options[0]; keep it when no is_simple(trial) option is found.'),
+    ('Fill in the omitted measurements in place.','Save chosen lines in self.lines[k], then refresh at V.'),
+    ('Traverse Data & Solved Results.','refresh() updates the table and Traverse Plot. Cannot solve shows str(error); R resumes the event loop.'),
+])
+connector(177,720,'P');node(177,657,'options',w=175,h=62,kind='decision');edge([(177,710),(177,688)])
+connector(300,657,'E');edge([(264.5,657),(290,657)],'False',(280,674))
+node(177,550,"Prefer one that doesn't cross itself.",'chosen = options[0]\nself.is_simple(trial)',w=195,h=100,kind='sub')
+edge([(177,626),(177,600)],'True',(202,611))
+node(177,427,'Fill in the omitted measurements in place.','self.lines[k] = line',w=195,h=70)
+edge([(177,500),(177,462)]);connector(177,345,'V');edge([(177,392),(177,355)])
+connector(430,720,'E');node(430,657,'Cannot solve','str(error)\nStatus: could not solve',w=170,h=82,kind='error')
+edge([(430,710),(430,698)]);connector(430,570,'R');edge([(430,616),(430,580)])
+connector(410,525,'V')
+node(410,450,'Traverse Data & Solved Results','refresh() | table_values()',w=200,h=70,kind='io')
+edge([(410,515),(410,485)])
+node(410,340,'Traverse Plot','draw_plot() | vertices()\ndraw_edges(points)',w=200,h=80,kind='io')
+edge([(410,415),(410,380)]);connector(410,255,'R');edge([(410,300),(410,265)])
 finish()
 C.save()
 print(OUT / 'TraverseCraft_Flowchart.pdf')

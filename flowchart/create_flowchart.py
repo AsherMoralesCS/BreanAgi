@@ -150,7 +150,7 @@ def page(title,steps):
     for i,(heading,description) in enumerate(steps):
         col=i//2;row=i%2
         assert col<2
-        paragraph=Paragraph(f'<b>{i+1}. {escape(heading)}</b> {escape(description)}',STEP_STYLE)
+        paragraph=Paragraph(f'<b>{(PAGE-1)*4+i+1}. {escape(heading)}</b> {escape(description)}',STEP_STYLE)
         _,ph=paragraph.wrap(col_w,120)
         px=x+10+col*(col_w+10);top=y+h-30-row*55
         assert ph<=52,(PAGE,i,ph)

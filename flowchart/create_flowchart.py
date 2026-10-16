@@ -17,6 +17,19 @@ PALETTE = {
     'error': ('#ffe4e6', '#be123c'),
     'connector': ('#ffffff', '#64748b'),
 }
+# A letter keeps the same fill on every page; the label also works in grayscale.
+CONNECTOR_COLORS = {
+    'R': ('#1d4ed8', '#ffffff'),  # Event loop: blue
+    'Z': ('#facc15', '#203249'),  # Reset: yellow
+    'M': ('#7c3aed', '#ffffff'),  # Menu: purple
+    'A': ('#047857', '#ffffff'),  # Add Line: green
+    'S': ('#0e7490', '#ffffff'),  # Solve: cyan
+    'D': ('#c2410c', '#ffffff'),  # Remove Selected: orange
+    'C': ('#be185d', '#ffffff'),  # Clear All: pink
+    'V': ('#475569', '#ffffff'),  # Refresh display: slate
+    'P': ('#854d0e', '#ffffff'),  # Candidate selection: brown
+    'E': ('#b91c1c', '#ffffff'),  # Solve error: red
+}
 C = canvas.Canvas(str(OUT / 'TraverseCraft_Flowchart.pdf'), pagesize=(WIDTH, HEIGHT))
 C.setTitle('Program flowchart')
 NODE_BOUNDS = []
@@ -50,8 +63,12 @@ def node(x, y, label, ref='', w=300, h=68, kind='process', size=13):
     C.setStrokeColor(HexColor(stroke))
     C.setLineWidth(1.25)
     if kind == 'connector':
+        fill, letter_color = CONNECTOR_COLORS[label]
+        C.setFillColor(HexColor(fill))
+        C.setStrokeColor(HexColor(fill))
         C.circle(x, y, 18, stroke=1, fill=1)
-        lines(x, y - 4.5, [label], 13, 'Helvetica-Bold')
+        lines(x, y - 4.5, [label], 13, 'Helvetica-Bold', color=letter_color)
+        NODE_BOUNDS.append((x-18, y-18, x+18, y+18))
         return
     if kind == 'term':
         C.roundRect(x-w/2, y-h/2, w, h, h/2, stroke=1, fill=1)
